@@ -3,7 +3,7 @@ USE ems_db;
 CREATE TABLE departments(
     id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(50) NOT NULL
-)
+);
 
 CREATE TABLE employees(
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -15,4 +15,4 @@ CREATE TABLE employees(
     status ENUM ('ACTIVE','INACTIVE'),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (department_id) REFERENCES departments(id)
-)
+);

@@ -1,6 +1,8 @@
 package main
 
-func main(){
+import "ems/project"
 
-	
+func main() {
+
+	project.EmsHandler()
 }
