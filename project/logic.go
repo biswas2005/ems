@@ -1,6 +1,7 @@
 package project
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -14,9 +15,26 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
+	"github.com/redis/go-redis/v9"
 )
 
 var db *sql.DB
+var rdb *redis.Client
+var ctx = context.Background()
+
+func connectrRedis() {
+	rdb = redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "",
+		DB:       0,
+	})
+
+	_, err := rdb.Ping(ctx).Result()
+	if err != nil {
+		log.Fatalf("Failed to connect to Redis:%v", err)
+	}
+	log.Println("Redis connected successfully.")
+}
 
 type Department struct {
 	ID   int    `json:"id"`
@@ -81,6 +99,8 @@ func createDepartment(w http.ResponseWriter, r *http.Request) {
 	}
 	dept.ID = int(id)
 
+	rdb.Del(ctx, "departments:all")
+
 	w.Header().Set("Content-Type", "application/json")
 	err = json.NewEncoder(w).Encode(dept)
 	if err != nil {
@@ -90,7 +110,16 @@ func createDepartment(w http.ResponseWriter, r *http.Request) {
 }
 
 func getDepartments(w http.ResponseWriter, r *http.Request) {
+	cacheKey := "departments:all"
 
+	val, err := rdb.Get(ctx, cacheKey).Result()
+	if err == nil {
+		log.Println("Cache hit...")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(val))
+		return
+	}
+	fmt.Println("Missing cache, quering DB...")
 	result, err := db.Query("SELECT * FROM departments")
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusInternalServerError)
@@ -105,12 +134,14 @@ func getDepartments(w http.ResponseWriter, r *http.Request) {
 		departments = append(departments, d)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	err = json.NewEncoder(w).Encode(departments)
+	data, err := json.Marshal(departments)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusInternalServerError)
 		return
 	}
+	rdb.Set(ctx, cacheKey, data, 10*time.Minute)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
 }
 
 func createEmployee(w http.ResponseWriter, r *http.Request) {
@@ -145,6 +176,8 @@ func createEmployee(w http.ResponseWriter, r *http.Request) {
 	}
 	emp.ID = int(id)
 
+	rdb.Del(ctx, "employees:all")
+
 	w.Header().Set("Content-Type", "application/json")
 	err = json.NewEncoder(w).Encode(emp)
 	if err != nil {
@@ -154,7 +187,15 @@ func createEmployee(w http.ResponseWriter, r *http.Request) {
 }
 
 func getEmployees(w http.ResponseWriter, r *http.Request) {
+	cacheKey := "employees:all"
 
+	if val, err := rdb.Get(ctx, cacheKey).Result(); err == nil {
+		log.Println("Cache hit...")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(val))
+		return
+	}
+	fmt.Println("Missing cache, quering DB...")
 	rows, err := db.Query("SELECT * FROM employees")
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusInternalServerError)
@@ -178,17 +219,28 @@ func getEmployees(w http.ResponseWriter, r *http.Request) {
 		employees = append(employees, e)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	err = json.NewEncoder(w).Encode(employees)
+	data, err := json.Marshal(employees)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusInternalServerError)
 		return
 	}
+	rdb.Set(ctx, cacheKey, data, 10*time.Minute)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
 }
 
 func getEmployeeByID(w http.ResponseWriter, r *http.Request) {
 
 	id := mux.Vars(r)["id"]
+	cacheKey := fmt.Sprintf("employee:%s", id)
+
+	if val, err := rdb.Get(ctx, cacheKey).Result(); err == nil {
+		log.Println("Cache hit...")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(val))
+		return
+	}
+	fmt.Println("Missing cache, quering DB...")
 	var e Employee
 	query :=
 		`SELECT * FROM employees WHERE id=?`
@@ -204,12 +256,14 @@ func getEmployeeByID(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	err = json.NewEncoder(w).Encode(e)
+	data, err := json.Marshal(e)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusInternalServerError)
 		return
 	}
+	rdb.Set(ctx, cacheKey, data, 10*time.Minute)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
 }
 
 func updateEmployee(w http.ResponseWriter, r *http.Request) {
@@ -246,6 +300,9 @@ func updateEmployee(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Error:%v", err1), http.StatusInternalServerError)
 		return
 	}
+
+	rdb.Del(ctx, "employees:all")
+	rdb.Del(ctx, fmt.Sprintf("employee:%s", id))
 	w.Write([]byte("Employee Updated Successfully."))
 }
 
@@ -258,6 +315,8 @@ func deleteEmployee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rdb.Del(ctx, "employees:all")
+	rdb.Del(ctx, fmt.Sprintf("employee:%s", id))
 	w.Write([]byte("Deleted employee successfully."))
 }
 
@@ -305,6 +364,7 @@ func EmsHandler() {
 	godotenv.Load()
 
 	connectDB()
+	connectrRedis()
 
 	router := mux.NewRouter()
 
