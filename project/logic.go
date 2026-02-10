@@ -12,48 +12,31 @@ import (
 	"strings"
 	"time"
 
-	//MySQL driver
 	_ "github.com/go-sql-driver/mysql"
-	//Gorilla mux router
+	"github.com/golang-jwt/jwt/v5"
+
 	"github.com/gorilla/mux"
-	//load environment variables from .env
+
 	"github.com/joho/godotenv"
-	//Redis client
+
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/crypto/bcrypt"
 )
 
-// Global database connection
-var db *sql.DB
+/*========== GLOBALS ==========*/
+var (
+	db        *sql.DB
+	rdb       *redis.Client
+	ctx       = context.Background()
+	jwtSecret []byte
+)
 
-// Global redis client
-var rdb *redis.Client
-
-// Global context used by Redis operations
-var ctx = context.Background()
-
-// Connect to Redis server
-func connectrRedis() {
-	rdb = redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379", //redis address
-		Password: "",               //No password
-		DB:       0,                //Default DB
-	})
-
-	//Check redis connectivity
-	_, err := rdb.Ping(ctx).Result()
-	if err != nil {
-		log.Fatalf("Failed to connect to Redis:%v", err)
-	}
-	log.Println("Redis connected successfully.")
-}
-
-// Department model
+/*========== MODELS ==========*/
 type Department struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`
 }
 
-// Employee model
 type Employee struct {
 	ID           int        `json:"id"`
 	Name         string     `json:"name"`
@@ -65,23 +48,31 @@ type Employee struct {
 	CreatedAt    *time.Time `json:"created_at"`
 }
 
-// Connect to MySQL database
+type LoginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type Claims struct {
+	UserID int    `json:"user_id"`
+	Email  string `json:"email"`
+	jwt.RegisteredClaims
+}
+
+/*========== CONNECTIONS ==========*/
 func connectDB() {
 	var err error
 
-	//Read DSN from environment variable
 	dsn := os.Getenv("MySQL_DSN")
 	if dsn == "" {
 		log.Fatal("MySQL_DSN not set in environment")
 	}
 
-	//Open database connection
 	db, err = sql.Open("mysql", dsn)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	//Verify database connection
 	err = db.Ping()
 	if err != nil {
 		log.Fatal("Database not reachable", err)
@@ -89,23 +80,126 @@ func connectDB() {
 	log.Println("Database connected successfully.")
 }
 
-// Create a new department
+func connectrRedis() {
+	rdb = redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "",
+		DB:       0,
+	})
+
+	_, err := rdb.Ping(ctx).Result()
+	if err != nil {
+		log.Fatalf("Failed to connect to Redis:%v", err)
+	}
+	log.Println("Redis connected successfully.")
+}
+
+/*========== JWT ==========*/
+func generateJWT(userID int, email string) (string, time.Duration, error) {
+	expiry := time.Minute * 15
+	claims := &Claims{
+		UserID: userID,
+		Email:  email,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(15 * time.Minute)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString(jwtSecret)
+	return signed, expiry, err
+}
+
+func jwtMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		auth := r.Header.Get("Authorization")
+		parts := strings.Split(auth, " ")
+		if len(parts) != 2 || parts[0] != "Bearer" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		tokenStr := parts[1]
+
+		if rdb.Exists(ctx, "bl:"+tokenStr).Val() == 1 {
+			http.Error(w, "Token revoked", http.StatusUnauthorized)
+			return
+		}
+
+		claims := &Claims{}
+		token, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (interface{}, error) {
+			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method")
+			}
+			return jwtSecret, nil
+		})
+
+		if err != nil || !token.Valid {
+			http.Error(w, "Invalid token", http.StatusUnauthorized)
+			return
+		}
+
+		ctx := context.WithValue(r.Context(), "user_id", claims.UserID)
+		ctx = context.WithValue(ctx, "email", claims.Email)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+/*========== AUTH ==========*/
+func login(w http.ResponseWriter, r *http.Request) {
+	var req LoginRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	var userID int
+	var hash string
+	err = db.QueryRow(
+		"SELECT id,password FROM users WHERE email=?", req.Email,
+	).Scan(&userID, &hash)
+	if err != nil || bcrypt.CompareHashAndPassword([]byte(hash), []byte(req.Password)) != nil {
+		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		return
+	}
+	token, ttl, err := generateJWT(userID, req.Email)
+	if err != nil {
+		http.Error(w, "Token generation failed", http.StatusInternalServerError)
+		return
+	}
+	err = json.NewEncoder(w).Encode(map[string]string{
+		"access_token": token,
+		"expires_in":   ttl.String(),
+	})
+}
+
+func logout(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(r.Header.Get("Authorization"), " ")
+	if len(parts) != 2 {
+		http.Error(w, "Invalid token", 401)
+		return
+	}
+	token := parts[1]
+
+	rdb.Set(ctx, "bl:"+token, "revoked", time.Minute*15)
+	w.Write([]byte("Logged out"))
+}
+
+/*========== HANDLERS ==========*/
 func createDepartment(w http.ResponseWriter, r *http.Request) {
 	var dept Department
-	//Decode request body into struct
+
 	err := json.NewDecoder(r.Body).Decode(&dept)
 	if err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
 
-	//Validate department input
 	if err := departmentValidation(dept); err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusBadRequest)
 		return
 	}
 
-	//Insert department into database
 	query := `INSERT INTO departments(name) VALUES(?)`
 	result, err := db.Exec(query, dept.Name)
 	if err != nil {
@@ -113,7 +207,6 @@ func createDepartment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//Get auto-generated ID
 	id, err := result.LastInsertId()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusInternalServerError)
@@ -121,10 +214,8 @@ func createDepartment(w http.ResponseWriter, r *http.Request) {
 	}
 	dept.ID = int(id)
 
-	//Invalidate department cache
 	rdb.Del(ctx, "departments:all")
 
-	//Send response
 	w.Header().Set("Content-Type", "application/json")
 	err = json.NewEncoder(w).Encode(dept)
 	if err != nil {
@@ -133,11 +224,9 @@ func createDepartment(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Fetch all departments (with Redis caching)
 func getDepartments(w http.ResponseWriter, r *http.Request) {
 	cacheKey := "departments:all"
 
-	//Try fetching from Redis cache
 	val, err := rdb.Get(ctx, cacheKey).Result()
 	if err == nil {
 		log.Println("Cache hit...")
@@ -145,7 +234,7 @@ func getDepartments(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(val))
 		return
 	}
-	//Cache miss --> query database
+
 	fmt.Println("Missing cache, quering DB...")
 	result, err := db.Query("SELECT * FROM departments")
 	if err != nil {
@@ -161,7 +250,6 @@ func getDepartments(w http.ResponseWriter, r *http.Request) {
 		departments = append(departments, d)
 	}
 
-	//Cache the result
 	data, err := json.Marshal(departments)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusInternalServerError)
@@ -172,24 +260,21 @@ func getDepartments(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-// Create a new employee
 func createEmployee(w http.ResponseWriter, r *http.Request) {
 
 	var emp Employee
-	//Decode JSON request
+
 	err := json.NewDecoder(r.Body).Decode(&emp)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusBadRequest)
 		return
 	}
 
-	//Validate employee input
 	if err := employeeValidation(emp); err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusBadRequest)
 		return
 	}
 
-	//Insert employee into database
 	query := `INSERT INTO employees(name,email,phone,salary,department_id,status) VALUES (?,?,?,?,?,?)`
 	result, err := db.Exec(query,
 		emp.Name, emp.Email,
@@ -201,7 +286,6 @@ func createEmployee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//Get inserted employee ID
 	id, err := result.LastInsertId()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusInternalServerError)
@@ -209,7 +293,6 @@ func createEmployee(w http.ResponseWriter, r *http.Request) {
 	}
 	emp.ID = int(id)
 
-	//Invalidate employees cache
 	rdb.Del(ctx, "employees:all")
 
 	w.Header().Set("Content-Type", "application/json")
@@ -220,18 +303,16 @@ func createEmployee(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Fetch all employees with Redis caching
 func getEmployees(w http.ResponseWriter, r *http.Request) {
 	cacheKey := "employees:all"
 
-	//Check Redis cache
 	if val, err := rdb.Get(ctx, cacheKey).Result(); err == nil {
 		log.Println("Cache hit...")
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(val))
 		return
 	}
-	//Cache miss --> Query database
+
 	fmt.Println("Missing cache, quering DB...")
 	rows, err := db.Query("SELECT * FROM employees")
 	if err != nil {
@@ -256,7 +337,6 @@ func getEmployees(w http.ResponseWriter, r *http.Request) {
 		employees = append(employees, e)
 	}
 
-	//Cache employees list
 	data, err := json.Marshal(employees)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusInternalServerError)
@@ -267,20 +347,18 @@ func getEmployees(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-// Fetch employees by ID (with Redis caching)
 func getEmployeeByID(w http.ResponseWriter, r *http.Request) {
 
 	id := mux.Vars(r)["id"]
 	cacheKey := fmt.Sprintf("employee:%s", id)
 
-	//Try redis first
 	if val, err := rdb.Get(ctx, cacheKey).Result(); err == nil {
 		log.Println("Cache hit...")
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(val))
 		return
 	}
-	//Cache miss --> Query database
+
 	fmt.Println("Missing cache, quering DB...")
 	var e Employee
 	query :=
@@ -297,7 +375,7 @@ func getEmployeeByID(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusInternalServerError)
 		return
 	}
-	//Cache single employee
+
 	data, err := json.Marshal(e)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusInternalServerError)
@@ -308,24 +386,21 @@ func getEmployeeByID(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-// Update employee details
 func updateEmployee(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
 	var emp Employee
-	//Decode request body
+
 	err := json.NewDecoder(r.Body).Decode(&emp)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusBadRequest)
 		return
 	}
 
-	//Validate input
 	if err := employeeValidation(emp); err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusBadRequest)
 		return
 	}
 
-	//Update employee record
 	query := `
 	UPDATE employees SET 
 	name=?,email=?,phone=?,salary=?,department_id=?,status=?
@@ -346,30 +421,25 @@ func updateEmployee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//Invalidate related cache
 	rdb.Del(ctx, "employees:all")
 	rdb.Del(ctx, fmt.Sprintf("employee:%s", id))
 	w.Write([]byte("Employee Updated Successfully."))
 }
 
-// Delete employee
 func deleteEmployee(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
 
-	//Delete from database
 	_, err := db.Exec("DELETE FROM employees WHERE id=?", id)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusInternalServerError)
 		return
 	}
 
-	//Clear cache
 	rdb.Del(ctx, "employees:all")
 	rdb.Del(ctx, fmt.Sprintf("employee:%s", id))
 	w.Write([]byte("Deleted employee successfully."))
 }
 
-// Validate department input
 func departmentValidation(d Department) error {
 
 	if strings.TrimSpace(d.Name) == "" {
@@ -381,7 +451,6 @@ func departmentValidation(d Department) error {
 	return nil
 }
 
-// Validate employee input
 func employeeValidation(e Employee) error {
 	if strings.TrimSpace(e.Name) == "" {
 		return errors.New("Employee name cannot be empty")
@@ -411,23 +480,30 @@ func employeeValidation(e Employee) error {
 	return nil
 }
 
-// Application entry handler
+/*========== MAIN ==========*/
 func EmsHandler() {
-	//Load environment variables
-	godotenv.Load()
 
-	//Connect database and redis
+	godotenv.Load()
+	jwtSecret = []byte(os.Getenv("JWT_SECRET"))
+	if len(jwtSecret) == 0 {
+		log.Fatal("JWT_SECRET missing")
+	}
+
 	connectDB()
 	connectrRedis()
 
-	//Initialize router
 	router := mux.NewRouter()
 
-	//Department routes
+	router.HandleFunc("/login", login).Methods("POST")
+
+	protected := router.PathPrefix("/").Subrouter()
+	protected.Use(jwtMiddleware)
+
+	protected.HandleFunc("/logout", logout).Methods("POST")
+
 	router.HandleFunc("/departments", createDepartment).Methods("POST")
 	router.HandleFunc("/departments", getDepartments).Methods("GET")
 
-	//Employee routes
 	router.HandleFunc("/employees", createEmployee).Methods("POST")
 	router.HandleFunc("/employees", getEmployees).Methods("GET")
 	router.HandleFunc("/employees/{id}", getEmployeeByID).Methods("GET")
