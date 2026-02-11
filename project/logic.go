@@ -27,7 +27,14 @@ import (
 )
 
 /*========== GLOBALS ==========*/
-//Global shared resources
+
+type Users struct {
+	ID       int    `json:"id"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+// Global shared resources
 var (
 	db        *sql.DB
 	rdb       *redis.Client
@@ -166,7 +173,28 @@ func jwtMiddleware(next http.Handler) http.Handler {
 }
 
 /*========== AUTH ==========*/
-//Login endpoint
+
+func register(w http.ResponseWriter, r *http.Request) {
+	var u Users
+	err := json.NewDecoder(r.Body).Decode(&u)
+	if err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if !strings.Contains(u.Email, "@") || len(u.Password) < 6 {
+		http.Error(w, "Invalid input", 404)
+		return
+	}
+	hash, _ := bcrypt.GenerateFromPassword([]byte(u.Password), bcrypt.DefaultCost)
+	_, err = db.Exec("INSERT INTO users(email,password) VALUES (?,?)", u.Email, string(hash))
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	w.Write([]byte("User registered"))
+}
+
+// Login endpoint
 func login(w http.ResponseWriter, r *http.Request) {
 	var req LoginRequest
 	//Decode request body
@@ -175,6 +203,7 @@ func login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
+
 	var userID int
 	var hash string
 	//Fetch user credentials
@@ -581,6 +610,8 @@ func EmsHandler() {
 	// Initialize Gorilla Mux router
 	router := mux.NewRouter()
 
+	router.HandleFunc("/register", register).Methods("POST")
+
 	// Public authentication route (no JWT required)
 	router.HandleFunc("/login", login).Methods("POST")
 
@@ -594,15 +625,15 @@ func EmsHandler() {
 	protected.HandleFunc("/logout", logout).Methods("POST")
 
 	// Department routes (currently public)
-	router.HandleFunc("/departments", createDepartment).Methods("POST")
-	router.HandleFunc("/departments", getDepartments).Methods("GET")
+	protected.HandleFunc("/departments", createDepartment).Methods("POST")
+	protected.HandleFunc("/departments", getDepartments).Methods("GET")
 
 	// Employee routes (currently public)
-	router.HandleFunc("/employees", createEmployee).Methods("POST")
-	router.HandleFunc("/employees", getEmployees).Methods("GET")
-	router.HandleFunc("/employees/{id}", getEmployeeByID).Methods("GET")
-	router.HandleFunc("/employees/{id}", updateEmployee).Methods("PUT")
-	router.HandleFunc("/employees/{id}", deleteEmployee).Methods("DELETE")
+	protected.HandleFunc("/employees", createEmployee).Methods("POST")
+	protected.HandleFunc("/employees", getEmployees).Methods("GET")
+	protected.HandleFunc("/employees/{id}", getEmployeeByID).Methods("GET")
+	protected.HandleFunc("/employees/{id}", updateEmployee).Methods("PUT")
+	protected.HandleFunc("/employees/{id}", deleteEmployee).Methods("DELETE")
 
 	// Log server startup message
 	log.Println("Server running on port:8080")
