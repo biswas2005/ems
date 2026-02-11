@@ -5,5 +5,5 @@ import "ems/project"
 func main() {
 
 	project.EmsHandler()
-	// project.Hash()
+	
 }
