@@ -10,10 +10,9 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-func GenerateJWT(userID int, email string) (string, time.Duration, error) {
-	expiry := time.Minute * 15
+func GenerateJWT(userID int, email string) (string, string, error) {
 
-	claims := &Claims{
+	accessClaims := &Claims{
 		UserID: userID,
 		Email:  email,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -22,10 +21,29 @@ func GenerateJWT(userID int, email string) (string, time.Duration, error) {
 		},
 	}
 
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	accessToken := jwt.NewWithClaims(jwt.SigningMethodHS256, accessClaims)
 
-	signed, err := token.SignedString(jwtSecret)
-	return signed, expiry, err
+	accessSigned, err := accessToken.SignedString(jwtSecret)
+	if err != nil {
+		return "", "", err
+	}
+
+	refreshClaims := jwt.RegisteredClaims{
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(7 * 24 * time.Hour)),
+		IssuedAt:  jwt.NewNumericDate(time.Now()),
+		Subject:   fmt.Sprintf("%d", userID),
+	}
+
+	refreshToken := jwt.NewWithClaims(jwt.SigningMethodHS256, refreshClaims)
+	refreshSigned, err := refreshToken.SignedString(jwtSecret)
+	if err != nil {
+		return "", "", err
+	}
+	err = rdb.Set(ctx, "refresh:"+refreshSigned, userID, 7*24*time.Hour).Err()
+	if err != nil {
+		return "", "", err
+	}
+	return accessSigned, refreshSigned, nil
 }
 
 func JwtMiddleware(next http.Handler) http.Handler {
