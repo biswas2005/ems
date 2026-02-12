@@ -20,18 +20,18 @@ import (
 	"github.com/joho/godotenv"
 	//Redis client
 	"github.com/redis/go-redis/v9"
-	//Password hashing
 )
 
 /*========== GLOBALS ==========*/
 // Global shared resources
 var (
-	db        *sql.DB
-	rdb       *redis.Client
-	ctx       = context.Background()
-	jwtSecret []byte
+	db        *sql.DB                //MySQL database connection
+	rdb       *redis.Client          //Redis client connection
+	ctx       = context.Background() //Shared context for Redis ops
+	jwtSecret []byte                 //Secret key for signing JWT
 )
 
+/*========== DATA MODELS ==========*/
 type Users struct {
 	ID       int    `json:"id"`
 	Email    string `json:"email"`
@@ -65,41 +65,51 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-func createDepartment(w http.ResponseWriter, r *http.Request) {
+/*========== HANDLERS ==========*/
 
+// createDepartment handles POST/departments
+// It creates a new department, stores it in DB,
+// and invalidates the Redis cache
+func createDepartment(w http.ResponseWriter, r *http.Request) {
+	//Struct to hold the incoming JSON data
 	var dept Department
 
+	//Decode JSON request body into Department struct
 	err := json.NewDecoder(r.Body).Decode(&dept)
 	if err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
 
+	//Validate department fields
 	if err := DepartmentValidation(dept); err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusBadRequest)
 		return
 	}
 
+	//SQL query to insert a new department
 	query := `INSERT INTO departments(name) VALUES(?)`
-
+	//Execute query with department name
 	result, err := db.Exec(query, dept.Name)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error inserting:%v", err), http.StatusInternalServerError)
 		return
 	}
 
+	//Get the auto-generated ID from MySQL
 	id, err := result.LastInsertId()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusInternalServerError)
 		return
 	}
 
+	//Assign generated ID back to response body
 	dept.ID = int(id)
-
+	//Invalidate Redis cache so that next GET fetches fresh data
 	rdb.Del(ctx, "departments:all")
 
+	//Send created department as JSON request
 	w.Header().Set("Content-Type", "application/json")
-
 	err = json.NewEncoder(w).Encode(dept)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusInternalServerError)
@@ -107,21 +117,25 @@ func createDepartment(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// getDepartments handles GET/departments
+// It first checks Redis cache before hitting the Database
 func getDepartments(w http.ResponseWriter, r *http.Request) {
-
+	//Redis cache key
 	cacheKey := "departments:all"
 
+	//Try fetching departments from Redis
 	val, err := rdb.Get(ctx, cacheKey).Result()
 	if err == nil {
-
+		//Cache hit: return cached data
 		log.Println("Cache hit...")
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(val))
 		return
 	}
-
+	//Cache miss, fetch data from DB
 	fmt.Println("Missing cache, quering DB...")
 
+	//Execute SELECT query
 	result, err := db.Query("SELECT * FROM departments")
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusInternalServerError)
@@ -129,45 +143,53 @@ func getDepartments(w http.ResponseWriter, r *http.Request) {
 	}
 	defer result.Close()
 
+	//Slice to store department records
 	var departments []Department
-
+	//Iterate through query results
 	for result.Next() {
 		var d Department
-
+		//Scan DB row into struct fields
 		result.Scan(&d.ID, &d.Name)
-
+		//Append departments to slice
 		departments = append(departments, d)
 	}
 
+	//Convert department slice into JSON
 	data, err := json.Marshal(departments)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusInternalServerError)
 		return
 	}
-
+	//Store result in Redis with TTL of 10 minutes
 	rdb.Set(ctx, cacheKey, data, 10*time.Minute)
-
+	//Return response to client
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
 }
 
+// createEmployee handles POST/employees
+// It validates input, inserts employees into DB,
+// and clears relevant Redis cache
 func createEmployee(w http.ResponseWriter, r *http.Request) {
-
+	//Struct to hold incoming JSON payload
 	var emp Employee
 
+	//Decode incoming request body into Employee struct
 	err := json.NewDecoder(r.Body).Decode(&emp)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusBadRequest)
 		return
 	}
 
+	//Validate employee fields
 	if err := EmployeeValidation(emp); err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusBadRequest)
 		return
 	}
 
+	//SQL insert query
 	query := `INSERT INTO employees(name,email,phone,salary,department_id,status) VALUES (?,?,?,?,?,?)`
-
+	//Execute insert with employee data
 	result, err := db.Exec(query,
 		emp.Name, emp.Email,
 		emp.Phone,
@@ -178,16 +200,18 @@ func createEmployee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	//Retrieve auto-generated employee ID
 	id, err := result.LastInsertId()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusInternalServerError)
 		return
 	}
-
+	//Assign ID to response struct
 	emp.ID = int(id)
-
+	//Invalidate employees list cache
 	rdb.Del(ctx, "employees:all")
 
+	//Send JSON response
 	w.Header().Set("Content-Type", "application/json")
 	err = json.NewEncoder(w).Encode(emp)
 	if err != nil {
@@ -196,9 +220,13 @@ func createEmployee(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// getEmployees handles GET/employees
+// It fetches employees list from Redis if available,
+// otherwise queries DB and cache the result
 func getEmployees(w http.ResponseWriter, r *http.Request) {
 	cacheKey := "employees:all"
 
+	//Try fetching data from Redis cache
 	if val, err := rdb.Get(ctx, cacheKey).Result(); err == nil {
 		log.Println("Cache hit...")
 		w.Header().Set("Content-Type", "application/json")
@@ -206,6 +234,7 @@ func getEmployees(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	//Cache miss: try fetching from database
 	fmt.Println("Missing cache, quering DB...")
 	rows, err := db.Query("SELECT * FROM employees")
 	if err != nil {
@@ -213,9 +242,10 @@ func getEmployees(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-
+	//Slice to store employees record
 	var employees []Employee
 
+	//Iterate over rows and scan data
 	for rows.Next() {
 		var e Employee
 		rows.Scan(
@@ -231,23 +261,27 @@ func getEmployees(w http.ResponseWriter, r *http.Request) {
 		employees = append(employees, e)
 	}
 
+	//Marshal employees slice into JSON
 	data, err := json.Marshal(employees)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusInternalServerError)
 		return
 	}
-
+	//Cache the response for 10 minutes
 	rdb.Set(ctx, cacheKey, data, 10*time.Minute)
-
+	//Return response
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
 }
 
+// getEmployeeByID handles GET/employees/{id}
+// It checks Redis cache, before quering the DB
 func getEmployeeByID(w http.ResponseWriter, r *http.Request) {
 
+	//Get employee id from URL params
 	id := mux.Vars(r)["id"]
 	cacheKey := fmt.Sprintf("employee:%s", id)
-
+	//Check Redis cache for employee
 	if val, err := rdb.Get(ctx, cacheKey).Result(); err == nil {
 		log.Println("Cache hit...")
 		w.Header().Set("Content-Type", "application/json")
@@ -255,6 +289,7 @@ func getEmployeeByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	//Cache miss: query database
 	fmt.Println("Missing cache, quering DB...")
 	var e Employee
 	query :=
@@ -273,14 +308,15 @@ func getEmployeeByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	//Marshal employee to JSON
 	data, err := json.Marshal(e)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusInternalServerError)
 		return
 	}
-
+	//Cache employee data
 	rdb.Set(ctx, cacheKey, data, 10*time.Minute)
-
+	//Return response
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
 }
