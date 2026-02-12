@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -49,14 +48,13 @@ func GenerateJWT(userID int, email string) (string, string, error) {
 func JwtMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
-		auth := r.Header.Get("Authorization")
-		parts := strings.Split(auth, " ")
-
-		if len(parts) != 2 || parts[0] != "Bearer" {
+		cookie, err := r.Cookie("access_token")
+		if err != nil {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-		tokenStr := parts[1]
+
+		tokenStr := cookie.Value
 
 		if rdb.Exists(ctx, "bl:"+tokenStr).Val() == 1 {
 			http.Error(w, "Token revoked", http.StatusUnauthorized)

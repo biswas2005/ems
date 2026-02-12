@@ -358,8 +358,6 @@ func EmsHandler() {
 
 	router := mux.NewRouter()
 
-	router.HandleFunc("/register", Register).Methods("POST")
-
 	router.HandleFunc("/login", Login).Methods("POST")
 
 	protected := router.PathPrefix("/").Subrouter()

@@ -3,33 +3,13 @@ package project
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"golang.org/x/crypto/bcrypt"
 )
-
-func Register(w http.ResponseWriter, r *http.Request) {
-	var u Users
-	err := json.NewDecoder(r.Body).Decode(&u)
-	if err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
-		return
-	}
-	if !strings.Contains(u.Email, "@") || len(u.Password) < 6 {
-		http.Error(w, "Invalid input", 404)
-		return
-	}
-	hash, _ := bcrypt.GenerateFromPassword([]byte(u.Password), bcrypt.DefaultCost)
-	_, err = db.Exec("INSERT INTO users(email,password) VALUES (?,?)", u.Email, string(hash))
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	w.Write([]byte("User registered"))
-}
 
 func Login(w http.ResponseWriter, r *http.Request) {
 
@@ -39,37 +19,44 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-	var user Users
-	err = db.QueryRow("SELECT id,email,password FROM users WHERE email=?", req.Email).Scan(&user.ID, &user.Email, &user.Password)
-	if err != nil {
+	adminEmail := os.Getenv("ADMIN_EMAIL")
+	adminPass := os.Getenv("ADMIN_PASS")
+	if req.Email != adminEmail {
 		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 		return
 	}
-	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password))
-	if err != nil {
+	if req.Password != adminPass {
 		http.Error(w, "Invalid Credentials", http.StatusUnauthorized)
 		return
 	}
 
-	accessToken, refreshToken, err := GenerateJWT(user.ID, user.Email)
+	accessToken, refreshToken, err := GenerateJWT(1, adminEmail)
 	if err != nil {
 		http.Error(w, "Token generation failed", http.StatusInternalServerError)
 		return
 	}
 
 	http.SetCookie(w, &http.Cookie{
+		Name:     "access_token",
+		Value:    accessToken,
+		HttpOnly: true,
+		Secure:   false,
+		SameSite: http.SameSiteStrictMode,
+		Path:     "/",
+		Expires:  time.Now().Add(15 * time.Minute),
+	})
+
+	http.SetCookie(w, &http.Cookie{
 		Name:     "refresh_token",
 		Value:    refreshToken,
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   false,
 		SameSite: http.SameSiteStrictMode,
 		Path:     "/",
 		Expires:  time.Now().Add(7 * 24 * time.Hour),
 	})
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"access_token": accessToken,
-	})
+	w.Write([]byte("Login successful"))
 
 }
 
@@ -118,6 +105,14 @@ func Logout(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("refresh_token")
 	if err == nil {
 		rdb.Del(ctx, "refresh:"+cookie.Value)
+
+		http.SetCookie(w, &http.Cookie{
+			Name:     "access_token",
+			Value:    "",
+			Path:     "/",
+			HttpOnly: true,
+			Expires:  time.Now().Add(-time.Hour),
+		})
 
 		http.SetCookie(w, &http.Cookie{
 			Name:     "refresh_token",
