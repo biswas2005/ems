@@ -20,6 +20,10 @@ import (
 	"github.com/joho/godotenv"
 	//Redis client
 	"github.com/redis/go-redis/v9"
+
+	_ "ems/docs"
+
+	httpSwagger "github.com/swaggo/http-swagger"
 )
 
 /*========== GLOBALS ==========*/
@@ -44,14 +48,13 @@ type Department struct {
 }
 
 type Employee struct {
-	ID           int        `json:"id"`
-	Name         string     `json:"name"`
-	Email        string     `json:"email"`
-	Phone        string     `json:"phone"`
-	Salary       float64    `json:"salary"`
-	DepartmentID int        `json:"department_id"`
-	Status       string     `json:"status"`
-	CreatedAt    *time.Time `json:"created_at"`
+	ID           int     `json:"id"`
+	Name         string  `json:"name"`
+	Email        string  `json:"email"`
+	Phone        string  `json:"phone"`
+	Salary       float64 `json:"salary"`
+	DepartmentID int     `json:"department_id"`
+	Status       string  `json:"status"`
 }
 
 type LoginRequest struct {
@@ -67,6 +70,18 @@ type Claims struct {
 
 /*========== HANDLERS ==========*/
 
+// CreateDepartment godoc
+// @Summary Create department
+// @Description Creates a new department
+// @Tags Departments
+// @Accept json
+// @Produce json
+// @Security CookieAuth
+// @Param department body Department true "Department data"
+// @Success 200 {object} Department
+// @Failure 400 {string} string "Validation error"
+// @Failure 500 {string} string "Server error"
+// @Router /departments [post]
 // createDepartment handles POST/departments
 // It creates a new department, stores it in DB,
 // and invalidates the Redis cache
@@ -117,6 +132,14 @@ func createDepartment(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// GetDepartments godoc
+// @Summary Get all departments
+// @Tags Departments
+// @Produce json
+// @Security CookieAuth
+// @Success 200 {array} Department
+// @Failure 500 {string} string "Server error"
+// @Router /departments [get]
 // getDepartments handles GET/departments
 // It first checks Redis cache before hitting the Database
 func getDepartments(w http.ResponseWriter, r *http.Request) {
@@ -167,6 +190,18 @@ func getDepartments(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+// CreateEmployee godoc
+// @Summary Create employee
+// @Description Creates a new employee
+// @Tags Employees
+// @Accept json
+// @Produce json
+// @Security CookieAuth
+// @Param employee body Employee true "Employee data"
+// @Success 200 {object} Employee
+// @Failure 400 {string} string "Validation error"
+// @Failure 500 {string} string "Server error"
+// @Router /employees [post]
 // createEmployee handles POST/employees
 // It validates input, inserts employees into DB,
 // and clears relevant Redis cache
@@ -220,6 +255,14 @@ func createEmployee(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// GetEmployees godoc
+// @Summary Get all employees
+// @Tags Employees
+// @Produce json
+// @Security CookieAuth
+// @Success 200 {array} Employee
+// @Failure 500 {string} string "Server error"
+// @Router /employees [get]
 // getEmployees handles GET/employees
 // It fetches employees list from Redis if available,
 // otherwise queries DB and cache the result
@@ -256,7 +299,6 @@ func getEmployees(w http.ResponseWriter, r *http.Request) {
 			&e.Salary,
 			&e.DepartmentID,
 			&e.Status,
-			&e.CreatedAt,
 		)
 		employees = append(employees, e)
 	}
@@ -274,6 +316,16 @@ func getEmployees(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+// GetEmployeeByID godoc
+// @Summary Get employee by ID
+// @Tags Employees
+// @Produce json
+// @Security CookieAuth
+// @Param id path int true "Employee ID"
+// @Success 200 {object} Employee
+// @Failure 404 {string} string "Not found"
+// @Failure 500 {string} string "Server error"
+// @Router /employees/{id} [get]
 // getEmployeeByID handles GET/employees/{id}
 // It checks Redis cache, before quering the DB
 func getEmployeeByID(w http.ResponseWriter, r *http.Request) {
@@ -302,7 +354,7 @@ func getEmployeeByID(w http.ResponseWriter, r *http.Request) {
 		&e.Phone, &e.Salary,
 		&e.DepartmentID,
 		&e.Status,
-		&e.CreatedAt)
+	)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusInternalServerError)
 		return
@@ -321,6 +373,18 @@ func getEmployeeByID(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+// UpdateEmployee godoc
+// @Summary Update employee
+// @Tags Employees
+// @Accept json
+// @Produce json
+// @Security CookieAuth
+// @Param id path int true "Employee ID"
+// @Param employee body Employee true "Employee data"
+// @Success 200 {string} string "Updated successfully"
+// @Failure 400 {string} string "Validation error"
+// @Failure 500 {string} string "Server error"
+// @Router /employees/{id} [put]
 // updateEmployee handles PUT/employees/{id}
 // Updates an existing employee
 func updateEmployee(w http.ResponseWriter, r *http.Request) {
@@ -371,6 +435,14 @@ func updateEmployee(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("Employee Updated Successfully."))
 }
 
+// DeleteEmployee godoc
+// @Summary Delete employee
+// @Tags Employees
+// @Security CookieAuth
+// @Param id path int true "Employee ID"
+// @Success 200 {string} string "Deleted successfully"
+// @Failure 500 {string} string "Server error"
+// @Router /employees/{id} [delete]
 // deleteEmployee handles DELETE/employees/{id}
 // Removes an employee from the database
 func deleteEmployee(w http.ResponseWriter, r *http.Request) {
@@ -391,6 +463,14 @@ func deleteEmployee(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("Deleted employee successfully."))
 }
 
+// @title EMS API
+// @version 1.0
+// @description Employee Management System with JWT Cookie Authentication
+// @host localhost:8080
+// @BasePath /
+// @securityDefinitions.apikey CookieAuth
+// @in cookie
+// @name access_token
 /*========== MAIN ==========*/
 func EmsHandler() {
 
@@ -421,6 +501,8 @@ func EmsHandler() {
 
 	// Protected route for logout
 	protected.HandleFunc("/logout", Logout).Methods("POST")
+
+	router.PathPrefix("/swagger/").Handler(httpSwagger.WrapHandler)
 
 	// Department routes (protected)
 	protected.HandleFunc("/departments", createDepartment).Methods("POST")

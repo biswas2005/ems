@@ -12,6 +12,17 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// Login godoc
+// @Summary Login admin
+// @Description Authenticates admin and sets access & refresh token cookies
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Param request body LoginRequest true "Login credentials"
+// @Success 200 {string} string "Login successful"
+// @Failure 400 {string} string "Invalid JSON"
+// @Failure 401 {string} string "Invalid credentials"
+// @Router /login [post]
 // Login handler: authenticates admin user and issues JWT tokens
 func Login(w http.ResponseWriter, r *http.Request) {
 
@@ -108,6 +119,14 @@ func RefreshHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Logout godoc
+// @Summary Logout user
+// @Description Invalidates access token and clears cookies
+// @Tags Auth
+// @Security CookieAuth
+// @Success 200 {string} string "Logged out successfully"
+// @Failure 401 {string} string "Unauthorized"
+// @Router /logout [post]
 // Logout Handler: invalidate token and clears cookies
 func Logout(w http.ResponseWriter, r *http.Request) {
 	//Extract access token from Authorization header
