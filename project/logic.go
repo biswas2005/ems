@@ -321,27 +321,33 @@ func getEmployeeByID(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+// updateEmployee handles PUT/employees/{id}
+// Updates an existing employee
 func updateEmployee(w http.ResponseWriter, r *http.Request) {
+	//Extract the "id" parameter from the request URL using mux
 	id := mux.Vars(r)["id"]
-
+	//Declare an employee struct to hold the decoded JSON data
 	var emp Employee
 
+	//Decode the request body JSON into the employee struct
 	err := json.NewDecoder(r.Body).Decode(&emp)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusBadRequest)
 		return
 	}
-
+	//Validate the employee data
 	if err := EmployeeValidation(emp); err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusBadRequest)
 		return
 	}
 
+	//sql query to update employee details to the database
 	query := `
 	UPDATE employees SET 
 	name=?,email=?,phone=?,salary=?,department_id=?,status=?
 	WHERE id=?`
 
+	//Execute the SQL update query with the provided employee data
 	_, err1 := db.Exec(
 		query,
 		&emp.Name,
@@ -352,14 +358,16 @@ func updateEmployee(w http.ResponseWriter, r *http.Request) {
 		&emp.Status,
 		id,
 	)
+	//If execution fails return an error
 	if err1 != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err1), http.StatusInternalServerError)
 		return
 	}
 
+	//Clear Redis cache for all employees and the specific updated employee
 	rdb.Del(ctx, "employees:all")
 	rdb.Del(ctx, fmt.Sprintf("employee:%s", id))
-
+	//Send a success response back to the client
 	w.Write([]byte("Employee Updated Successfully."))
 }
 
