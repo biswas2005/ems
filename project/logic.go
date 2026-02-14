@@ -371,55 +371,70 @@ func updateEmployee(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("Employee Updated Successfully."))
 }
 
+// deleteEmployee handles DELETE/employees/{id}
+// Removes an employee from the database
 func deleteEmployee(w http.ResponseWriter, r *http.Request) {
+	// Extract the "id" parameter from the request URL using mux
 	id := mux.Vars(r)["id"]
 
+	// Execute SQL query to delete the employee record by ID
 	_, err := db.Exec("DELETE FROM employees WHERE id=?", id)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error:%v", err), http.StatusInternalServerError)
 		return
 	}
 
+	// Clear Redis cache for all employees and the specific deleted employee
 	rdb.Del(ctx, "employees:all")
 	rdb.Del(ctx, fmt.Sprintf("employee:%s", id))
-
+	// Send a success response back to the client
 	w.Write([]byte("Deleted employee successfully."))
 }
 
+/*========== MAIN ==========*/
 func EmsHandler() {
 
+	// Load environment variables from .env file
 	godotenv.Load()
 
+	// Read JWT secret from environment variables
 	jwtSecret = []byte(os.Getenv("JWT_SECRET"))
 
+	// Ensure JWT secret is present, otherwise terminate the program
 	if len(jwtSecret) == 0 {
 		log.Fatal("JWT_SECRET missing")
 	}
 
+	// Connection to the database
 	ConnectDB()
-
+	// Connection to Redis
 	ConnectRedis()
-
+	// Create a new Gorilla mux router
 	router := mux.NewRouter()
 
+	// Public route for login
 	router.HandleFunc("/login", Login).Methods("POST")
-
+	// Create a subrouter for protected routes
 	protected := router.PathPrefix("/").Subrouter()
-
+	// Apply JwtMiddleware to protected routes
 	protected.Use(JwtMiddleware)
 
+	// Protected route for logout
 	protected.HandleFunc("/logout", Logout).Methods("POST")
 
+	// Department routes (protected)
 	protected.HandleFunc("/departments", createDepartment).Methods("POST")
 	protected.HandleFunc("/departments", getDepartments).Methods("GET")
 
+	// Employee routes (protected)
 	protected.HandleFunc("/employees", createEmployee).Methods("POST")
 	protected.HandleFunc("/employees", getEmployees).Methods("GET")
 	protected.HandleFunc("/employees/{id}", getEmployeeByID).Methods("GET")
 	protected.HandleFunc("/employees/{id}", updateEmployee).Methods("PUT")
 	protected.HandleFunc("/employees/{id}", deleteEmployee).Methods("DELETE")
 
+	//Log server startup message
 	log.Println("Server running on port:8080")
-
+	// Start the HTTP server on port 8080
 	http.ListenAndServe(":8080", router)
 }
