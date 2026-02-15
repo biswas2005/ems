@@ -1,9 +1,9 @@
-FROM golang:1.22-alpine AS builder
+FROM golang:latest AS builder
+
 
 WORKDIR /app
 
-# Install git (required for go mod)
-RUN apk add --no-cache git
+RUN apt-get update && apt-get install -y git
 
 # Copy go mod files first
 COPY go.mod go.sum ./
@@ -14,7 +14,6 @@ COPY . .
 
 # Build binary
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ems
-
 
 FROM alpine:latest
 
@@ -28,4 +27,4 @@ COPY .env .
 
 EXPOSE 8080
 
-CMD ["./main"]
+CMD ["./ems"]

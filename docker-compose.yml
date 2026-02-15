@@ -30,7 +30,7 @@ services:
       - mysql_data:/var/lib/mysql
 
   redis:
-    image: redis:7
+    image: redis:5
     container_name: ems_redis
     ports:
       - "6379:6379"
