@@ -38,9 +38,9 @@ func ConnectDB() {
 func ConnectRedis() {
 	//Create a new Redis client with default options
 	rdb = redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379", //Redis server address
-		Password: "",               //No password set
-		DB:       0,                //Use default DB
+		Addr:     os.Getenv("REDIS_ADDR"), //Redis server address
+		Password: "",                      //No password set
+		DB:       0,                       //Use default DB
 	})
 
 	//Ping Redis to confirm connectivity
