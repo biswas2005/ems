@@ -11,6 +11,7 @@ pkgs.mkShell {
   ];
 
   shellHook = ''
+
     echo "EMS Dev Environment Ready"
     echo "Go version: $(go version)"
   '';
