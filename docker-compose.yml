@@ -1,7 +1,4 @@
-version: "3.9"
-
 services:
-
   app:
     build: .
     container_name: ems_app
@@ -11,30 +8,29 @@ services:
       - mysql
       - redis
     environment:
-      JWT_SECRET: supersecretkey
-      ADMIN_EMAIL: admin@gmail.com
-      ADMIN_PASS: admin123
-      MySQL_DSN: root:root@tcp(mysql:3306)/ems
-    restart: always
+      - .env 
 
   mysql:
-    image: mysql:8
+    image: mysql:8.3
     container_name: ems_mysql
-    restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: root
+      MYSQL_ROOT_PASSWORD: ${MYSQL_DSN}
       MYSQL_DATABASE: ems
     ports:
-      - "3307:3306"
+      - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
+    restart: unless-stopped
 
   redis:
-    image: redis:5
+    image: redis:7-alpine
     container_name: ems_redis
     ports:
       - "6379:6379"
-    restart: always
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
 
 volumes:
   mysql_data:
+  redis_data:
