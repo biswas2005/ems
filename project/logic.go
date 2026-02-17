@@ -475,7 +475,9 @@ func deleteEmployee(w http.ResponseWriter, r *http.Request) {
 func EmsHandler() {
 
 	// Load environment variables from .env file
-	godotenv.Load()
+	if os.Getenv("ENV") != "production" {
+		godotenv.Load()
+	}
 
 	// Read JWT secret from environment variables
 	jwtSecret = []byte(os.Getenv("JWT_SECRET"))

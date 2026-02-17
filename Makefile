@@ -1,21 +1,24 @@
-.PHONY: build run clean up down logs
+APP_NAME=ems
 
-APP=ems
+.PHONY: build run docker-up docker-down clean logs
 
 build:
-	go build -o $(APP)
+	go build -o $(APP_NAME)
 
 run:
 	go run main.go
 
-clean:
-	rm -f $(APP)
+docker-up:
+	docker compose up --build
 
-up:
-	docker compose up --build -d 
-
-down:
+docker-down:
 	docker compose down
+
+docker-clean:
+	docker compose down -v
 
 logs:
 	docker compose logs -f
+
+clean:
+	rm -f $(APP_NAME)
