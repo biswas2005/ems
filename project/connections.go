@@ -14,10 +14,10 @@ func ConnectDB() {
 	var err error
 
 	//Read DSN (Data Source Name) from environment variables
-	dsn := os.Getenv("MySQL_DSN")
+	dsn := os.Getenv("MYSQL_DSN")
 	if dsn == "" {
 		//Fail if DSN is not set
-		log.Fatal("MySQL_DSN not set in environment")
+		log.Fatal("MYSQL_DSN not set in environment")
 	}
 
 	//Open a connection using the MySQL driver

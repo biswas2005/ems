@@ -5,40 +5,29 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_started
+      - mysql
+      - redis
     environment:
       ENV: production
-      MySQL_DSN: root:${MYSQL_ROOT_PASSWORD}@tcp(mysql:3306)/${MYSQL_DATABASE}?parseTime=true
-      REDIS_ADDR: redis:6379
       JWT_SECRET: ${JWT_SECRET}
       ADMIN_EMAIL: ${ADMIN_EMAIL}
       ADMIN_PASS: ${ADMIN_PASS}
-    restart: unless-stopped
+      MYSQL_DSN: ${MYSQL_USER}:${MYSQL_PASSWORD}@tcp(${MYSQL_ADDR})/${MYSQL_DATABASE}?parseTime=true
+      REDIS_ADDR: ${REDIS_ADDR}
 
   mysql:
-    image: mysql:8.3
+    image: mysql:8.0
     container_name: ems_mysql
+    restarts: always
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE}
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 5s
-      retries: 5
-    
-    restart: unless-stopped
 
   redis:
-    image: redis:7-alpine
+    image: redis:7
     container_name: ems_redis
-    
-    restart: unless-stopped
 
 volumes:
   mysql_data:
