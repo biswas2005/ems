@@ -2,12 +2,12 @@ CREATE DATABASE IF NOT EXISTS ems_db;
 
 USE ems_db;
 
-CREATE TABLE departments(
+CREATE TABLE IF NOT EXISTS departments(
     id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(50) NOT NULL
 );
 
-CREATE TABLE employees(
+CREATE TABLE IF NOT EXISTS employees(
     id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(50) NOT NULL,
     email VARCHAR(50) NOT NULL,
@@ -17,10 +17,4 @@ CREATE TABLE employees(
     status ENUM ('ACTIVE','INACTIVE'),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (department_id) REFERENCES departments(id)
-);
-
-CREATE TABLE users(
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    email VARCHAR(100) UNIQUE NOT NULL,
-    password VARCHAR(150) NOT NULL
 );
